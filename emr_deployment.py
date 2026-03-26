@@ -22,6 +22,30 @@ from pyspark.sql.functions import (
     when,
     year,
 )
+from pyspark.sql.types import DoubleType, IntegerType, StringType, TimestampType
+
+
+def _safe_select(
+    df, column_map: dict[str, tuple[str, object]], service_type: str
+):
+    """Select expected columns and backfill missing ones with nulls.
+
+    The NYC taxi schemas vary by year and service. This keeps the EMR job from
+    failing immediately when one parquet dataset is missing a field such as
+    congestion_surcharge or RatecodeID.
+    """
+    selected_exprs = []
+    existing_columns = set(df.columns)
+
+    for source_name, (target_name, spark_type) in column_map.items():
+        if source_name in existing_columns:
+            selected_exprs.append(col(source_name).alias(target_name))
+        else:
+            print(f"Column '{source_name}' not found for {service_type}; filling nulls.")
+            selected_exprs.append(lit(None).cast(spark_type).alias(target_name))
+
+    selected_exprs.append(lit(service_type).alias("service_type"))
+    return df.select(*selected_exprs)
 
 
 def report(input_green: str, input_yellow: str, input_zones: str ,output: str) -> None:
@@ -54,46 +78,46 @@ def report(input_green: str, input_yellow: str, input_zones: str ,output: str) -
                 "DOLocationID",
                 "service_type",
             ]
+            green_column_map = {
+                "lpep_pickup_datetime": ("pickup_datetime", TimestampType()),
+                "lpep_dropoff_datetime": ("dropoff_datetime", TimestampType()),
+                "payment_type": ("payment_type", IntegerType()),
+                "RatecodeID": ("RatecodeID", IntegerType()),
+                "total_amount": ("total_amount", DoubleType()),
+                "fare_amount": ("fare_amount", DoubleType()),
+                "tip_amount": ("tip_amount", DoubleType()),
+                "tolls_amount": ("tolls_amount", DoubleType()),
+                "congestion_surcharge": ("congestion_surcharge", DoubleType()),
+                "trip_distance": ("trip_distance", DoubleType()),
+                "PULocationID": ("PULocationID", IntegerType()),
+                "DOLocationID": ("DOLocationID", IntegerType()),
+            }
+            yellow_column_map = {
+                "tpep_pickup_datetime": ("pickup_datetime", TimestampType()),
+                "tpep_dropoff_datetime": ("dropoff_datetime", TimestampType()),
+                "payment_type": ("payment_type", IntegerType()),
+                "RatecodeID": ("RatecodeID", IntegerType()),
+                "total_amount": ("total_amount", DoubleType()),
+                "fare_amount": ("fare_amount", DoubleType()),
+                "tip_amount": ("tip_amount", DoubleType()),
+                "tolls_amount": ("tolls_amount", DoubleType()),
+                "congestion_surcharge": ("congestion_surcharge", DoubleType()),
+                "trip_distance": ("trip_distance", DoubleType()),
+                "PULocationID": ("PULocationID", IntegerType()),
+                "DOLocationID": ("DOLocationID", IntegerType()),
+            }
 
             print(f"Loading green taxi data from: {input_green}")
             green_df = spark.read.parquet(input_green)
             print(f"Green data loaded: {green_df.count()} rows")
-
-            green_df = green_df.select(
-                col("lpep_pickup_datetime").alias("pickup_datetime"),
-                col("lpep_dropoff_datetime").alias("dropoff_datetime"),
-                col("payment_type"),
-                col("RatecodeID"),
-                col("total_amount"),
-                col("fare_amount"),
-                col("tip_amount"),
-                col("tolls_amount"),
-                col("congestion_surcharge"),
-                col("trip_distance"),
-                col("PULocationID"),
-                col("DOLocationID"),
-                lit("green").alias("service_type"),
-            )
+            print(f"Green schema columns: {green_df.columns}")
+            green_df = _safe_select(green_df, green_column_map, "green")
 
             print(f"Loading yellow taxi data from: {input_yellow}")
             yellow_df = spark.read.parquet(input_yellow)
             print(f"Yellow data loaded: {yellow_df.count()} rows")
-
-            yellow_df = yellow_df.select(
-                col("tpep_pickup_datetime").alias("pickup_datetime"),
-                col("tpep_dropoff_datetime").alias("dropoff_datetime"),
-                col("payment_type"),
-                col("RatecodeID"),
-                col("total_amount"),
-                col("fare_amount"),
-                col("tip_amount"),
-                col("tolls_amount"),
-                col("congestion_surcharge"),
-                col("trip_distance"),
-                col("PULocationID"),
-                col("DOLocationID"),
-                lit("yellow").alias("service_type"),
-            )
+            print(f"Yellow schema columns: {yellow_df.columns}")
+            yellow_df = _safe_select(yellow_df, yellow_column_map, "yellow")
 
             print("Merging normalized datasets...")
             trip_df = green_df.select(selected_columns).unionByName(
@@ -104,7 +128,7 @@ def report(input_green: str, input_yellow: str, input_zones: str ,output: str) -
             # Fill missing categorical values before building downstream
             # reports, and remove invalid rate codes used as placeholders.
             trip_df = trip_df.withColumn(
-                "payment_type", coalesce(col("payment_type"), lit(0))
+                "payment_type", coalesce(col("payment_type").cast("int"), lit(0))
             )
             trip_df = trip_df.filter(col("RatecodeID") != 99)
             

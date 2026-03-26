@@ -6,6 +6,8 @@ A production-grade data engineering pipeline that processes **NYC Green and Yell
 
 ## 📐 Architecture Overview
 
+![diagram](./diagram.png)
+
 ```
 Amazon S3 (Input)
         │
@@ -16,14 +18,14 @@ Amazon S3 (Input)
 ┌──────────────────────────────────────────┐
 │            AWS EMR Cluster               │
 │                                          │
-│  Master : 1x m5.xlarge  (Driver)        │
-│  Core   : 2x m5.xlarge  (Executors)     │
+│  Master : 1x m5.xlarge  (Driver)         │
+│  Core   : 2x m5.xlarge  (Executors)      │
 │                                          │
 │  emr_deployment.py                       │
 │  ├── Load & normalize green + yellow     │
 │  ├── Schema-safe union → trips_df        │
 │  ├── Data quality filters                │
-│  └── Generate 10 analytical reports     │
+│  └── Generate 10 analytical reports      │
 └──────────────────────────────────────────┘
                 │
                 ▼

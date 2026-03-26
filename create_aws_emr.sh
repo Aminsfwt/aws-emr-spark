@@ -14,6 +14,7 @@ aws emr create-cluster \
   ]' \
   --use-default-roles \
   --log-uri s3://nyc-taxi-pyspark-de-bootcamp/logs/ \
+  --auto-terminate \
   --region us-east-1 \
   --steps '[
     {
@@ -23,9 +24,9 @@ aws emr create-cluster \
       "Args": [
         "--deploy-mode", "cluster",
         "s3://nyc-taxi-pyspark-de-bootcamp/code/emr_deployment.py",
-        "--input_green",  "s3://nyc-taxi-pyspark-de-bootcamp/processed/green/*",
-        "--input_yellow", "s3://nyc-taxi-pyspark-de-bootcamp/processed/yellow/*",
-        "--input_zones",  "s3://nyc-taxi-pyspark-de-bootcamp/raw/zones/*",
+        "--input_green",  "s3://nyc-taxi-pyspark-de-bootcamp/raw/green/",
+        "--input_yellow", "s3://nyc-taxi-pyspark-de-bootcamp/raw/yellow/",
+        "--input_zones",  "s3://nyc-taxi-pyspark-de-bootcamp/raw/zones/",
         "--output",       "s3://nyc-taxi-pyspark-de-bootcamp/report/nyc_taxi_service_report"
       ]
     }

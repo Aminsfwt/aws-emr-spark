@@ -1,6 +1,6 @@
-# 🚕 NYC Taxi Analytics — AWS EMR Spark Pipeline
+# 🚕 NYC Taxi Analytics — AWS EMR PySpark Pipeline
 
-A cloud-native data engineering pipeline built with **Apache Spark on AWS EMR**, processing NYC Green and Yellow taxi trip data and generating a unified service report stored in **Amazon S3**.
+A production-grade data engineering pipeline that processes **NYC Green and Yellow taxi trip data (2009–2026)** using **Apache Spark on AWS EMR**, generating **10 analytical reports** written as Parquet to **Amazon S3**.
 
 ---
 
@@ -9,28 +9,36 @@ A cloud-native data engineering pipeline built with **Apache Spark on AWS EMR**,
 ```
 Amazon S3 (Input)
         │
-        ├── processed/green/*/*   → Green Taxi Parquet files
-        └── processed/yellow/*/*  → Yellow Taxi Parquet files
+        ├── processed/green/*/*      → Green Taxi Parquet files
+        └── processed/yellow/*/*     → Yellow Taxi Parquet files
                 │
                 ▼
-┌──────────────────────────────────────┐
-│         AWS EMR Cluster              │
-│                                      │
-│  Master:  1x m5.xlarge              │
-│  Core:    2x m5.xlarge              │
-│                                      │
-│  spark-submit emr_deployment.py      │
-│    1. Load green + yellow data       │
-│    2. Normalize column names         │
-│    3. Add service_type label         │
-│    4. Union both datasets            │
-│    5. SQL query → trips in 2020      │
-│    6. Write report to S3             │
-└──────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│            AWS EMR Cluster               │
+│                                          │
+│  Master : 1x m5.xlarge  (Driver)        │
+│  Core   : 2x m5.xlarge  (Executors)     │
+│                                          │
+│  emr_deployment.py                       │
+│  ├── Load & normalize green + yellow     │
+│  ├── Schema-safe union → trips_df        │
+│  ├── Data quality filters                │
+│  └── Generate 10 analytical reports     │
+└──────────────────────────────────────────┘
                 │
                 ▼
 Amazon S3 (Output)
-└── report/nyc_taxi_service_report/    → Final Parquet Report
+└── report/nyc_taxi/
+    ├── trips_per_service_type_report/
+    ├── fare_analysis_report/
+    ├── yoy_trip_volume_report/
+    ├── speed_by_zone_report/
+    ├── top_pickup_zones_report/
+    ├── top_dropoff_zones_report/
+    ├── payment_behavior_report/
+    ├── hourly_patterns_report/
+    ├── ratecode_analysis_report/
+    └── congestion_impact_report/
 ```
 
 ---
@@ -39,15 +47,16 @@ Amazon S3 (Output)
 
 ```
 project/
-├── create_aws_emr.sh       # AWS CLI command to create EMR cluster + submit job
-└── emr_deployment.py       # PySpark job — transform and report logic
+├── create_aws_emr.sh       # AWS CLI command — creates cluster and submits job
+├── emr_deployment.py       # PySpark ETL job — all transformation and report logic
+└── README.md
 ```
 
 ---
 
 ## ☁️ AWS Infrastructure
 
-### EMR Cluster — `create_aws_emr.sh`
+### EMR Cluster (`create_aws_emr.sh`)
 
 | Property | Value |
 |---|---|
@@ -55,28 +64,29 @@ project/
 | EMR Release | `emr-7.12.0` |
 | Application | Spark |
 | Region | `us-east-1` |
-| Auto-terminate | Yes (shuts down after job completes) |
+| Auto-terminate | ✅ Yes — shuts down after job completes |
+| Deploy Mode | `cluster` — driver runs on master node |
 
 ### Instance Groups
 
-| Role | Type | Count | Purpose |
-|---|---|---|---|
-| Master | `m5.xlarge` | 1 | Cluster manager + Driver |
-| Core | `m5.xlarge` | 2 | Executors + HDFS storage |
-
-**Total capacity:** 3 nodes, each with 4 vCPUs and 16GB RAM
+| Role | Type | Count | vCPU | RAM |
+|---|---|---|---|---|
+| Master | `m5.xlarge` | 1 | 4 | 16GB |
+| Core | `m5.xlarge` | 2 | 4 | 16GB |
 
 ### S3 Bucket Layout
 
 ```
 s3://nyc-taxi-pyspark-de-bootcamp/
-├── logs/                              # EMR cluster logs
+├── logs/                              # EMR cluster and step logs
+├── emr_deployment.py                  # PySpark script (upload before running)
+├── raw/
+    └── taxi_zones/*                   # taxi zones name parquet
 ├── processed/
-│   ├── green/*/*                      # Green taxi input Parquet files
-│   └── yellow/*/*                     # Yellow taxi input Parquet files
-├── emr_deployment.py                  # PySpark script (uploaded before running)
+│   ├── green/*/*                      # Green taxi Parquet — partitioned by year/month
+│   └── yellow/*/*                     # Yellow taxi Parquet — partitioned by year/month
 └── report/
-    └── nyc_taxi_service_report/       # Output report Parquet files
+    └── nyc_taxi/                      # All 10 output reports written here
 ```
 
 ---
@@ -84,10 +94,11 @@ s3://nyc-taxi-pyspark-de-bootcamp/
 ## ⚙️ Prerequisites
 
 - AWS CLI installed and configured (`aws configure`)
-- IAM permissions for EMR, S3, and EC2
-- Default EMR roles created (`EMR_DefaultRole`, `EMR_EC2_DefaultRole`)
-- Input Parquet files already uploaded to S3 under `processed/green/` and `processed/yellow/`
-- PySpark script uploaded to S3
+- IAM permissions: `AmazonEMRFullAccess`, `AmazonS3FullAccess`, `AmazonEC2FullAccess`
+- Default EMR roles exist (run `aws emr create-default-roles` if not)
+- Input Parquet files uploaded to S3
+- Python 3.8+ (for local testing only)
+- PySpark 3.5+ (matches EMR 7.x)
 
 ---
 
@@ -99,183 +110,232 @@ s3://nyc-taxi-pyspark-de-bootcamp/
 aws s3 cp emr_deployment.py s3://nyc-taxi-pyspark-de-bootcamp/emr_deployment.py
 ```
 
-### Step 2 — Create EMR Cluster and Submit Job
+### Step 2 — Create the Cluster and Submit the Job
 
 ```bash
 bash create_aws_emr.sh
 ```
 
-This single command:
-- Creates the EMR cluster
-- Installs Spark
-- Submits `emr_deployment.py` as a Spark step
-- Auto-terminates the cluster when the job completes
-- Streams logs to `s3://nyc-taxi-pyspark-de-bootcamp/logs/`
+This single command creates the EMR cluster, installs Spark, submits the job as a Spark step, and auto-terminates the cluster when done.
 
 ### Step 3 — Monitor the Job
 
-**Via AWS Console:**
+**AWS Console:**
 ```
-AWS Console → EMR → Clusters → nyc-taxi-spark-cluster → Steps
+AWS Console → EMR → Clusters → nyc-taxi-spark-cluster → Steps tab
 ```
 
-**Via AWS CLI:**
+**AWS CLI:**
 ```bash
-# List clusters to get cluster ID
+# Get the cluster ID
 aws emr list-clusters --active --region us-east-1
 
-# Check step status
+# Watch step status
 aws emr describe-step \
-    --cluster-id <your-cluster-id> \
-    --step-id <your-step-id> \
+    --cluster-id <cluster-id> \
+    --step-id <step-id> \
     --region us-east-1
 ```
 
-### Step 4 — Verify Output
+### Step 4 — Verify Outputs
 
 ```bash
-aws s3 ls s3://nyc-taxi-pyspark-de-bootcamp/report/nyc_taxi_service_report/
+aws s3 ls s3://nyc-taxi-pyspark-de-bootcamp/report/nyc_taxi/ --recursive
 ```
 
 ---
 
 ## 🔄 Job Logic — `emr_deployment.py`
 
-### Input
+### Arguments
 
-| Argument | Description | Example |
+| Argument | Required | Description |
 |---|---|---|
-| `--input_green` | S3 path to green taxi Parquet | `s3://bucket/processed/green/*/*` |
-| `--input_yellow` | S3 path to yellow taxi Parquet | `s3://bucket/processed/yellow/*/*` |
-| `--output` | S3 path for output report | `s3://bucket/report/nyc_taxi_service_report` |
+| `--input_green` | ✅ | S3 path to green taxi Parquet files |
+| `--input_yellow` | ✅ | S3 path to yellow taxi Parquet files |
+| `--input_zones` | ✅ | S3 path to taxi zones lookup Parquet files |
+| `--output` | ✅ | S3 base path for all output reports |
 
 ---
 
-### Processing Steps
+### Processing Pipeline
 
-**1. Load Green Taxi Data**
-```python
-green_df = spark.read.parquet(input_green)
-
-# Normalize column names
-green_df = green_df.select(
-    col('lpep_pickup_datetime').alias('pickup_datetime'),
-    col('lpep_dropoff_datetime').alias('dropoff_datetime')
-)
-green_df = green_df.withColumn('service_type', lit('green'))
 ```
-
-**2. Load Yellow Taxi Data**
-```python
-yellow_df = spark.read.parquet(input_yellow)
-
-# Normalize column names
-yellow_df = yellow_df.select(
-    col('tpep_pickup_datetime').alias('pickup_datetime'),
-    col('tpep_dropoff_datetime').alias('dropoff_datetime')
-)
-yellow_df = yellow_df.withColumn('service_type', lit('yellow'))
-```
-
-**3. Schema-Safe Union**
-```python
-# Find common columns between both DataFrames
-common_columns = [col for col in green_df.columns if col in set(yellow_df.columns)]
-
-# Union only on shared columns to avoid schema mismatch errors
-trip_df = green_df.select(common_columns).union(yellow_df.select(common_columns))
-```
-
-**4. SQL Report — Trips per Service Type in 2020**
-```sql
-SELECT
-    service_type,
-    COUNT(*) AS total_trips
-FROM trips
-WHERE pickup_datetime >= '2020-01-01'
-GROUP BY service_type
-```
-
-**5. Write Output**
-```python
-report_df.write.parquet(output, mode="overwrite")
+Step 1  Load green Parquet    → rename lpep_ columns → add service_type='green'
+Step 2  Load yellow Parquet   → rename tpep_ columns → add service_type='yellow'
+Step 3  Find common columns   → schema-safe union → trips_df
+Step 4  Data quality filters  → null payment_type → 0, remove RatecodeID=99
+Step 5  Generate 10 reports   → write each as Parquet to S3
 ```
 
 ---
 
-### Output Schema
+## 📊 Reports Generated
 
-| Column | Type | Description |
-|---|---|---|
-| `service_type` | String | `green` or `yellow` |
-| `total_trips` | Long | Total trip count for 2020 |
+### Report 1 — Trips per Service Type (2020+)
+**Answers:** How many trips did green vs yellow taxis make from 2020 onwards?
 
-**Example output:**
-```
-+------------+-----------+
-|service_type|total_trips|
-+------------+-----------+
-|       green|    1234567|
-|      yellow|    9876543|
-+------------+-----------+
-```
-
----
-
-## 💡 Key Design Decisions
-
-| Decision | Reason |
+| Column | Description |
 |---|---|
-| `--deploy-mode cluster` | Driver runs on EMR master node, not local machine — safer for production |
-| `--auto-terminate` | Cluster shuts down after job — avoids paying for idle EC2 instances |
-| Schema-safe union | Green and Yellow taxis have different column names — renaming before union prevents errors |
-| `SparkSession` as context manager | Ensures session closes cleanly even on failure |
-| Wildcard S3 paths `/*/*` | Reads all partitioned subdirectories recursively in one call |
-| `mode="overwrite"` | Allows re-running the job without manual cleanup of previous output |
+| `service_type` | `green` or `yellow` |
+| `total_trips` | Total trip count from 2020-01-01 |
 
 ---
 
-## 🛑 Common Errors & Fixes
+### Report 2 — Revenue & Fare Analysis
+**Answers:** Where does the money come from across service types and payment methods?
 
-| Error | Cause | Fix |
-|---|---|---|
-| `An error occurred (ValidationException)` | Default EMR roles missing | Run `aws emr create-default-roles` |
-| `NoSuchKey` on S3 path | Script or data not uploaded | Re-run `aws s3 cp` commands |
-| `AnalysisException: column not found` | Schema mismatch on union | Common columns logic handles this — check column names in both datasets |
-| Step status `FAILED` | Job error | Check logs at `s3://nyc-taxi-pyspark-de-bootcamp/logs/` |
-| `AccessDenied` on S3 | IAM permissions | Ensure EMR EC2 role has `s3:GetObject` and `s3:PutObject` on the bucket |
+| Column | Description |
+|---|---|
+| `service_type` | green / yellow |
+| `payment_type` | Payment method code |
+| `total_revenue_K` | Total revenue in thousands |
+| `avg_fare` | Average base fare |
+| `avg_tip` | Average tip amount |
+| `avg_tolls` | Average tolls |
+| `avg_congestion` | Average congestion surcharge |
+| `total_trips` | Trip count |
+
+---
+
+### Report 3 — Year-over-Year Trip Volume (2009–2026)
+**Answers:** How did taxi demand change over 17 years? (COVID crash visible in 2020)
+
+| Column | Description |
+|---|---|
+| `year` | Trip year |
+| `service_type` | green / yellow |
+| `total_trips` | Annual trip count |
+| `total_revenue` | Annual revenue |
+| `avg_distance` | Average trip distance |
+
+---
+
+### Report 4 — Trip Duration & Speed by Zone
+**Answers:** Which pickup zones are most congested?
+
+| Column | Description |
+|---|---|
+| `PULocationID` | Pickup zone ID |
+| `avg_speed` | Average speed in mph |
+| `avg_duration` | Average trip duration in minutes |
+| `trip_count` | Number of trips from this zone |
+
+**Data quality filters applied:**
+- `trip_duration_min` between 0 and 300 minutes
+- `avg_speed_mph` under 100 mph
+
+---
+
+### Report 5 — Top Pickup Zones
+**Answers:** Which zones generate the most pickups?
+
+| Column | Description |
+|---|---|
+| `PULocationID` | Pickup zone ID |
+| `pickup_count` | Total pickups from this zone |
+| `avg_revenue_per_trip` | Average fare per trip |
+
+---
+
+### Report 6 — Top Dropoff Zones
+**Answers:** Which dropoff zones generate the most revenue?
+
+| Column | Description |
+|---|---|
+| `DOLocationID` | Dropoff zone ID |
+| `dropoff_count` | Total dropoffs to this zone |
+| `total_revenue` | Total revenue from dropoffs here |
+
+> 💡 Join Reports 5 & 6 with the [NYC Taxi Zone Lookup CSV](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) to get human-readable neighborhood names.
+
+---
+
+### Report 7 — Payment Type Behavior
+**Answers:** How do cash vs card riders behave differently?
+
+| Column | Description |
+|---|---|
+| `payment_type` | 0=Voided, 1=Card, 2=Cash, 3=No charge, 4=Dispute, 5=Unknown |
+| `service_type` | green / yellow |
+| `trip_count` | Number of trips |
+| `avg_tip` | Average tip (card trips tip more) |
+| `avg_total` | Average total fare |
+| `avg_distance` | Average trip distance |
+
+---
+
+### Report 8 — Peak Hours & Day-of-Week Patterns
+**Answers:** When are taxis busiest and most profitable?
+
+| Column | Description |
+|---|---|
+| `hour` | Hour of day (0–23) |
+| `day_of_week` | Full day name (Monday–Sunday) |
+| `trip_count` | Number of trips in this slot |
+| `avg_revenue` | Average revenue per trip |
+| `avg_tip` | Average tip per trip |
+
+---
+
+### Report 9 — Rate Code Analysis
+**Answers:** How do airport trips compare to standard trips?
+
+| Column | Description |
+|---|---|
+| `RatecodeID` | 1=Standard, 2=JFK, 3=Newark, 4=Nassau, 5=Negotiated, 6=Group |
+| `trip_count` | Number of trips |
+| `avg_fare` | Average base fare |
+| `avg_distance` | Average distance |
+| `avg_tip` | Average tip |
+| `total_revenue_K` | Total revenue in thousands |
+
+---
+
+### Report 10 — Congestion Surcharge Impact
+**Answers:** How did NYC's 2019 congestion pricing law affect riders and trip volumes?
+
+| Column | Description |
+|---|---|
+| `era` | Pre-Congestion / Transition / Post-Congestion |
+| `service_type` | green / yellow |
+| `trip_count` | Number of trips in that era |
+| `avg_total` | Average total fare |
+| `avg_fare` | Average base fare |
+| `avg_congestion_charge` | Average congestion surcharge added |
+
+---
+
+
 
 ---
 
 ## 💰 Cost Estimate
 
-| Resource | Type | Count | Approx Cost |
+| Resource | Type | Count | Rate |
 |---|---|---|---|
-| Master node | m5.xlarge | 1 | ~$0.19/hr |
-| Core nodes | m5.xlarge | 2 | ~$0.38/hr |
+| Master node | m5.xlarge | 1 | ~$0.192/hr |
+| Core nodes | m5.xlarge | 2 | ~$0.384/hr |
 | EMR surcharge | — | — | ~$0.17/hr |
-| **Total** | | | **~$0.74/hr** |
+| **Total** | | | **~$0.75/hr** |
 
-> Since `--auto-terminate` is enabled, the cluster only runs for the duration of the job. A typical job on this dataset takes 5–15 minutes, costing less than **$0.20 per run**.
+With `--auto-terminate`, a typical job run costs under **$0.20**.
 
 ---
 
-## 🖥️ Monitoring & Logs
+## 🖥️ Logs & Monitoring
 
-| Location | What You Find |
+| Location | Contents |
 |---|---|
-| AWS Console → EMR → Steps | Step status: Pending / Running / Completed / Failed |
-| `s3://nyc-taxi-pyspark-de-bootcamp/logs/` | Full cluster and step logs |
-| `s3://.../logs/<cluster-id>/steps/<step-id>/stdout` | `print()` output from your PySpark script |
-| `s3://.../logs/<cluster-id>/steps/<step-id>/stderr` | Error traces and Spark logs |
+| `s3://.../logs/<cluster-id>/steps/<step-id>/stdout` | All `print()` output from the job |
+| `s3://.../logs/<cluster-id>/steps/<step-id>/stderr` | Spark logs and Python tracebacks |
+| AWS Console → EMR → Steps | Visual status for each step |
 
 ---
 
 ## 🔮 Next Steps
 
-- **Add Apache Airflow** to trigger `create_aws_emr.sh` on a schedule using `EmrCreateJobFlowOperator`
-- **Extend the report** — add revenue, distance, and tip metrics to the SQL query
-- **Partition the output** by `service_type` for faster downstream queries
-- **Add data quality checks** before writing using Great Expectations
-- **Connect to AWS Athena** to query the output Parquet report with SQL directly from S3
-- **Visualize in Power BI** by connecting to Athena or loading the output Parquet files
+- **Airflow orchestration** — trigger `create_aws_emr.sh` on a schedule using `EmrCreateJobFlowOperator`
+- **AWS Athena** — register output Parquet as Athena tables for ad-hoc SQL queries
+- **Power BI / Tableau** — connect directly to S3 Parquet via Athena for live dashboards
+- **Great Expectations** — add data quality checks before writing reports

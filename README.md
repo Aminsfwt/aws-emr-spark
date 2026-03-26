@@ -1,6 +1,6 @@
 # 🚕 NYC Taxi Analytics — AWS EMR PySpark Pipeline
 
-A production-grade data engineering pipeline that processes **NYC Green and Yellow taxi trip data (2009–2026)** using **Apache Spark on AWS EMR**, generating **10 analytical reports** written as Parquet to **Amazon S3**.
+A production-grade data engineering pipeline that processes **NYC Green and Yellow taxi trip data ** using **Apache Spark on AWS EMR**, generating **10 analytical reports** written as Parquet to **Amazon S3**.
 
 ---
 
